@@ -1,0 +1,31 @@
+# Unreal Engine — build / cache / local (do not upload)
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+Build/
+*.sln
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+.vs/
+.idea/
+*.xcodeproj
+*.xcworkspace
+
+# Local / redundant archives
+ALS-Refactored-main.zip
+*.log
+*.tmp
+*.temp
+
+# OS junk
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Crash / profiling dumps
+*.dmp
+*.mdmp
