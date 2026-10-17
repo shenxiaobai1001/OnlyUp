@@ -10,7 +10,8 @@ public class OnlyUP : ModuleRules
 		{
 			ModuleDirectory,
 			System.IO.Path.Combine(ModuleDirectory, "Gift"),
-			System.IO.Path.Combine(ModuleDirectory, "Video")
+			System.IO.Path.Combine(ModuleDirectory, "Video"),
+			System.IO.Path.Combine(ModuleDirectory, "Dance")
 		});
 
 		PublicDependencyModuleNames.AddRange(new[]
