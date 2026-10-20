@@ -203,6 +203,51 @@ void UAlsCharacterMovementComponent::BeginPlay()
 	Super::BeginPlay();
 }
 
+bool UAlsCharacterMovementComponent::DoJump(const bool /*bReplayingMoves*/, const float /*DeltaTime*/)
+{
+	if (!CharacterOwner || !CharacterOwner->CanJump())
+	{
+		return false;
+	}
+
+	// Same plane constraint as UCharacterMovementComponent::DoJump.
+	if (bConstrainToPlane && FMath::IsNearlyEqual(FMath::Abs(GetGravitySpaceZ(PlaneConstraintNormal)), 1.0f))
+	{
+		return false;
+	}
+
+	const auto bNewJump{!CharacterOwner->bWasJumping};
+	const auto bAirJump{bNewJump && CharacterOwner->JumpCurrentCountPreJump > 0};
+	const FVector::FReal LaunchSpeed{bAirJump && AirJumpZVelocity > 0.0f ? AirJumpZVelocity : JumpZVelocity};
+
+	auto NewVerticalSpeed{HasCustomGravity() ? GetGravitySpaceZ(Velocity) : Velocity.Z};
+
+	if (bAirJump)
+	{
+		// Combine with the current upward speed so pressing again while still rising adds one jump of height.
+		// A falling character gets a fresh launch at LaunchSpeed.
+		NewVerticalSpeed = NewVerticalSpeed > 0.0f
+			                   ? FMath::Sqrt(FMath::Square(NewVerticalSpeed) + FMath::Square(LaunchSpeed))
+			                   : LaunchSpeed;
+	}
+	else if (bNewJump || bDontFallBelowJumpZVelocityDuringJump)
+	{
+		NewVerticalSpeed = FMath::Max(NewVerticalSpeed, LaunchSpeed);
+	}
+
+	if (HasCustomGravity())
+	{
+		SetGravitySpaceZ(Velocity, NewVerticalSpeed);
+	}
+	else
+	{
+		Velocity.Z = NewVerticalSpeed;
+	}
+
+	SetMovementMode(MOVE_Falling);
+	return true;
+}
+
 FVector UAlsCharacterMovementComponent::ConsumeInputVector()
 {
 	auto InputVector{Super::ConsumeInputVector()};
@@ -804,6 +849,63 @@ void UAlsCharacterMovementComponent::ComputeFloorDist(const FVector& CapsuleLoca
 	OutFloorResult.bWalkableFloor = false;
 
 	// ReSharper restore All
+}
+
+bool UAlsCharacterMovementComponent::FloorSweepTest(FHitResult& OutHit, const FVector& Start, const FVector& End,
+                                                    const ECollisionChannel TraceChannel, const FCollisionShape& CollisionShape,
+                                                    const FCollisionQueryParams& Params, const FCollisionResponseParams& ResponseParam) const
+{
+	if (!bUseFlatBaseForFloorChecks || !CollisionShape.IsCapsule())
+	{
+		return Super::FloorSweepTest(OutHit, Start, End, TraceChannel, CollisionShape, Params, ResponseParam);
+	}
+
+	// Same enclosed box as UCharacterMovementComponent::FloorSweepTest. The engine runs the 45-degree
+	// box first, so a corner leads into the next stair riser and that unwalkable hit hides the tread.
+	// Prefer whichever orientation actually lands on a walkable surface.
+	const float CapsuleRadius{CollisionShape.GetCapsuleRadius()};
+	const float CapsuleHeight{CollisionShape.GetCapsuleHalfHeight()};
+	const FCollisionShape BoxShape{FCollisionShape::MakeBox(FVector{CapsuleRadius * 0.707f, CapsuleRadius * 0.707f, CapsuleHeight})};
+
+	FHitResult AxisHit{1.0f};
+	const bool bAxisHit{GetWorld()->SweepSingleByChannel(
+		AxisHit, Start, End, GetWorldToGravityTransform(), TraceChannel, BoxShape, Params, ResponseParam)};
+
+	FHitResult RotatedHit{1.0f};
+	const bool bRotatedHit{GetWorld()->SweepSingleByChannel(
+		RotatedHit, Start, End, FQuat{GetGravityDirection(), UE_PI * 0.25f}, TraceChannel, BoxShape, Params, ResponseParam)};
+
+	const bool bAxisWalkable{bAxisHit && IsWalkable(AxisHit)};
+	const bool bRotatedWalkable{bRotatedHit && IsWalkable(RotatedHit)};
+
+	if (bAxisWalkable || bRotatedWalkable)
+	{
+		const bool bUseAxis{bAxisWalkable && (!bRotatedWalkable || AxisHit.Time <= RotatedHit.Time)};
+		OutHit = bUseAxis ? AxisHit : RotatedHit;
+		return true;
+	}
+
+	if (bAxisHit || bRotatedHit)
+	{
+		const bool bUseAxis{bAxisHit && (!bRotatedHit || AxisHit.Time <= RotatedHit.Time)};
+		OutHit = bUseAxis ? AxisHit : RotatedHit;
+		return true;
+	}
+
+	OutHit.Reset(1.0f, false);
+	return false;
+}
+
+bool UAlsCharacterMovementComponent::ShouldComputePerchResult(const FHitResult& InHit, const bool bCheckRadius) const
+{
+	// A flat-base contact sits on the box corner, outside PerchRadiusThreshold even when the tread
+	// is solid. Rejecting that perch drops the pawn off every stair nose into falling.
+	if (bUseFlatBaseForFloorChecks && IsWalkable(InHit))
+	{
+		return false;
+	}
+
+	return Super::ShouldComputePerchResult(InHit, bCheckRadius);
 }
 
 void UAlsCharacterMovementComponent::PerformMovement(const float DeltaTime)

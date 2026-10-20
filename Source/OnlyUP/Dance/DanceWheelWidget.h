@@ -4,13 +4,16 @@
 #include "Blueprint/UserWidget.h"
 #include "DanceWheelWidget.generated.h"
 
-class UButton;
+class UCanvasPanel;
+class UDanceSectorWidget;
+class UPanelWidget;
 class USoundBase;
 
 DECLARE_MULTICAST_DELEGATE(FOnDanceWheelClosed);
 
 /**
- * Fixed 8-sector dance wheel. Layout and hover style live on the widget blueprint.
+ * Dance wheel. Sector layout lives on the widget blueprint under Panel_Sectors.
+ * Selection follows the mouse direction from that panel's center.
  */
 UCLASS()
 class ONLYUP_API UDanceWheelWidget : public UUserWidget
@@ -18,6 +21,7 @@ class ONLYUP_API UDanceWheelWidget : public UUserWidget
 	GENERATED_BODY()
 
 public:
+	UDanceWheelWidget(const FObjectInitializer& ObjectInitializer);
 	UFUNCTION(BlueprintCallable, Category = "Dance")
 	void OpenWheel();
 
@@ -27,13 +31,26 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Dance")
 	bool IsWheelOpen() const;
 
+	UFUNCTION(BlueprintPure, Category = "Dance")
+	bool ShouldShowCursorWhileOpen() const { return bShowCursorWhileOpen; }
+
+	/** Left click while open. Plays the current sector, or does nothing inside the dead zone. */
+	void ConfirmSelection();
+
 	FOnDanceWheelClosed OnWheelClosed;
 
 	UFUNCTION(BlueprintNativeEvent, Category = "Dance")
 	void PlayDance(int32 DanceIndex);
 
+	UFUNCTION(BlueprintImplementableEvent, Category = "Dance")
+	void OnSectorSelected(int32 Index);
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Dance")
+	void OnSectorDeselected(int32 Index);
+
 protected:
 	virtual void NativeConstruct() override;
+	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 	virtual void PlayDance_Implementation(int32 DanceIndex);
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Dance")
@@ -48,75 +65,44 @@ protected:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Dance", meta = (ClampMin = "0.0"))
 	float ClickSoundStartTime = 0.f;
 
-	UPROPERTY(meta = (BindWidgetOptional))
-	TObjectPtr<UButton> Btn_Dismiss;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Dance", meta = (ClampMin = "0.0"))
+	float CursorInnerRadius = 80.f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Dance", meta = (ClampMin = "0.0"))
+	float CursorOuterRadius = 280.f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Dance", meta = (ClampMin = "1"))
+	int32 SectorCount = 8;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Dance", meta = (ClampMin = "0.0"))
+	float SectorRadius = 200.f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Dance", meta = (ClampMin = "0.0"))
+	float SectorScale = 1.f;
+
+	/** Degrees clockwise from straight up. 0 places sector 0 at the top. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Dance")
+	float FirstSectorAngle = 0.f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Dance")
+	bool bShowCursorWhileOpen = true;
 
 	UPROPERTY(meta = (BindWidgetOptional))
-	TObjectPtr<UButton> Btn_Dance_0;
-
-	UPROPERTY(meta = (BindWidgetOptional))
-	TObjectPtr<UButton> Btn_Dance_1;
-
-	UPROPERTY(meta = (BindWidgetOptional))
-	TObjectPtr<UButton> Btn_Dance_2;
-
-	UPROPERTY(meta = (BindWidgetOptional))
-	TObjectPtr<UButton> Btn_Dance_3;
-
-	UPROPERTY(meta = (BindWidgetOptional))
-	TObjectPtr<UButton> Btn_Dance_4;
-
-	UPROPERTY(meta = (BindWidgetOptional))
-	TObjectPtr<UButton> Btn_Dance_5;
-
-	UPROPERTY(meta = (BindWidgetOptional))
-	TObjectPtr<UButton> Btn_Dance_6;
-
-	UPROPERTY(meta = (BindWidgetOptional))
-	TObjectPtr<UButton> Btn_Dance_7;
+	TObjectPtr<UCanvasPanel> Panel_Sectors;
 
 private:
-	void BindButtons();
-	void HandleDanceClicked(int32 DanceIndex);
-	void HandleDanceHovered(int32 DanceIndex);
+	void GenerateSectors();
+	void StopNavigation(UWidget* Widget);
+	void UpdateSelection();
+	void SetSelectedIndex(int32 NewIndex);
 	void PlayUiSound(USoundBase* Sound, float StartTime) const;
+	bool TryGetAbsoluteCenter(UWidget* Widget, FVector2D& OutCenter) const;
+	FVector2D LastRingDirection = FVector2D(0.f, -1.f);
 
-	UFUNCTION()
-	void HandleDismissClicked();
+	UPROPERTY()
+	TArray<TObjectPtr<UDanceSectorWidget>> SectorWidgets;
 
-	UFUNCTION()
-	void HandleDanceClicked0();
-	UFUNCTION()
-	void HandleDanceClicked1();
-	UFUNCTION()
-	void HandleDanceClicked2();
-	UFUNCTION()
-	void HandleDanceClicked3();
-	UFUNCTION()
-	void HandleDanceClicked4();
-	UFUNCTION()
-	void HandleDanceClicked5();
-	UFUNCTION()
-	void HandleDanceClicked6();
-	UFUNCTION()
-	void HandleDanceClicked7();
-
-	UFUNCTION()
-	void HandleDanceHovered0();
-	UFUNCTION()
-	void HandleDanceHovered1();
-	UFUNCTION()
-	void HandleDanceHovered2();
-	UFUNCTION()
-	void HandleDanceHovered3();
-	UFUNCTION()
-	void HandleDanceHovered4();
-	UFUNCTION()
-	void HandleDanceHovered5();
-	UFUNCTION()
-	void HandleDanceHovered6();
-	UFUNCTION()
-	void HandleDanceHovered7();
-
-	bool bButtonsBound = false;
+	int32 SelectedIndex = INDEX_NONE;
+	bool bLoggedMissingPanel = false;
+	bool bSectorsGenerated = false;
 };

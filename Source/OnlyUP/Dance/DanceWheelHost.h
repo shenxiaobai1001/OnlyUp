@@ -24,8 +24,12 @@ public:
 private:
 	void BindInputIfNeeded();
 	void EnsureWidget();
-	void ToggleWheel();
+	void OpenFromTab();
+	void CloseFromTab();
+	void ConfirmFromClick();
 	void ApplyInputMode(bool bWheelOpen);
+	void SetLookIgnored(bool bIgnore);
+	void UpdateClickConsume();
 
 	UFUNCTION()
 	void HandleWheelClosedFromWidget();
@@ -35,4 +39,7 @@ private:
 
 	bool bInputBound = false;
 	bool bWheelOpen = false;
+	bool bClosedByClickWhileHeld = false;
+	bool bCloseRequestedByTab = false;
+	bool bLookIgnored = false;
 };

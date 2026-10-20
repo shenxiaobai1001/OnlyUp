@@ -412,13 +412,28 @@ private:
 public:
 	virtual void Jump() override;
 
+	virtual void StopJumping() override;
+
 	virtual void OnJumped_Implementation() override;
 
-private:
-	UFUNCTION(NetMulticast, Reliable)
-	void MulticastOnJumpedNetworked();
+protected:
+	virtual bool CanJumpInternal_Implementation() const override;
 
-	void OnJumpedNetworked();
+	virtual void ClearJumpInput(float DeltaTime) override;
+
+private:
+	/// True after a jump press until the button is released. Stops a held button from immediately spending the second jump.
+	uint8 bJumpPressConsumed : 1 {false};
+
+	/// True when Jump() ran this frame. ClearJumpInput uses it to tell a held button from a release.
+	uint8 bJumpCalledThisFrame : 1 {false};
+
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastOnJumpedNetworked(bool bAirJump);
+
+	void OnJumpedNetworked(bool bAirJump);
+
+	void PlayAirJumpMontage() const;
 
 	// Rotation
 

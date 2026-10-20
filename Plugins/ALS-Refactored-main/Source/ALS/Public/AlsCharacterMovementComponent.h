@@ -83,6 +83,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Settings")
 	uint8 bAllowImprovedPenetrationAdjustment : 1 {true};
 
+	/// Upward speed of jumps after the first. Values <= 0 use JumpZVelocity.
+	/// While still rising, this speed is combined with the current upward speed so the
+	/// extra jump adds about one jump of height instead of being ignored or stacked linearly.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Character Movement: Jumping / Falling",
+		Meta = (ClampMin = 0, ForceUnits = "cm/s"))
+	float AirJumpZVelocity{0.0f};
+
 protected:
 	FAlsCharacterNetworkMoveDataContainer MoveDataContainer;
 
@@ -153,6 +160,8 @@ public:
 
 	virtual float GetMaxAcceleration() const override;
 
+	virtual bool DoJump(bool bReplayingMoves, float DeltaTime) override;
+
 protected:
 	virtual void ControlledCharacterMove(const FVector& InputVector, float DeltaTime) override;
 
@@ -172,6 +181,12 @@ protected:
 public:
 	virtual void ComputeFloorDist(const FVector& CapsuleLocation, float LineDistance, float SweepDistance, FFindFloorResult& OutFloorResult,
 	                              float SweepRadius, const FHitResult* DownwardSweepResult) const override;
+
+	virtual bool FloorSweepTest(FHitResult& OutHit, const FVector& Start, const FVector& End, ECollisionChannel TraceChannel,
+	                            const FCollisionShape& CollisionShape, const FCollisionQueryParams& Params,
+	                            const FCollisionResponseParams& ResponseParam) const override;
+
+	virtual bool ShouldComputePerchResult(const FHitResult& InHit, bool bCheckRadius = true) const override;
 
 protected:
 	virtual void PerformMovement(float DeltaTime) override;

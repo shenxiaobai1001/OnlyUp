@@ -1,25 +1,63 @@
 #include "DanceWheelWidget.h"
 
-#include "Components/Button.h"
+#include "Blueprint/SlateBlueprintLibrary.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/CanvasPanel.h"
+#include "Components/CanvasPanelSlot.h"
+#include "Components/ContentWidget.h"
+#include "Components/PanelWidget.h"
+#include "DanceSectorWidget.h"
+#include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(DanceWheelWidget)
 
+UDanceWheelWidget::UDanceWheelWidget(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer)
+{
+	bHasScriptImplementedTick = true;
+}
+
 void UDanceWheelWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
-	BindButtons();
+	StopNavigation(this);
+	if (WidgetTree)
+	{
+		StopNavigation(WidgetTree->RootWidget);
+	}
+	GenerateSectors();
 	SetVisibility(ESlateVisibility::Collapsed);
+}
+
+void UDanceWheelWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
+{
+	Super::NativeTick(MyGeometry, InDeltaTime);
+	if (IsWheelOpen())
+	{
+		UpdateSelection();
+	}
 }
 
 void UDanceWheelWidget::OpenWheel()
 {
+	GenerateSectors();
+	for (UDanceSectorWidget* Sector : SectorWidgets)
+	{
+		if (Sector)
+		{
+			Sector->ResetToDefault();
+			Sector->OnWheelUIOpened();
+		}
+	}
+	SetSelectedIndex(INDEX_NONE);
 	SetVisibility(ESlateVisibility::Visible);
 }
 
 void UDanceWheelWidget::CloseWheel()
 {
 	const bool bWasOpen = IsWheelOpen();
+	SetSelectedIndex(INDEX_NONE);
 	SetVisibility(ESlateVisibility::Collapsed);
 	if (bWasOpen)
 	{
@@ -32,99 +70,207 @@ bool UDanceWheelWidget::IsWheelOpen() const
 	return GetVisibility() == ESlateVisibility::Visible;
 }
 
+void UDanceWheelWidget::ConfirmSelection()
+{
+	if (!IsWheelOpen() || SelectedIndex == INDEX_NONE)
+	{
+		return;
+	}
+
+	const int32 Index = SelectedIndex;
+	PlayUiSound(ClickSound, ClickSoundStartTime);
+	CloseWheel();
+	PlayDance(Index);
+}
+
 void UDanceWheelWidget::PlayDance_Implementation(int32 DanceIndex)
 {
 	UE_LOG(LogTemp, Log, TEXT("[DanceWheel] PlayDance index=%d (empty)"), DanceIndex);
 }
 
-void UDanceWheelWidget::BindButtons()
+void UDanceWheelWidget::GenerateSectors()
 {
-	if (bButtonsBound)
+	if (bSectorsGenerated)
 	{
 		return;
 	}
-	bButtonsBound = true;
 
-	if (Btn_Dismiss)
+	if (!Panel_Sectors)
 	{
-		Btn_Dismiss->OnClicked.AddDynamic(this, &UDanceWheelWidget::HandleDismissClicked);
+		if (!bLoggedMissingPanel)
+		{
+			bLoggedMissingPanel = true;
+			UE_LOG(LogTemp, Warning, TEXT("[DanceWheel] Panel_Sectors must be a Canvas Panel."));
+		}
+		return;
+	}
+
+	if (SectorCount < 1)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[DanceWheel] SectorCount must be at least 1."));
+		return;
+	}
+
+	UClass* SectorClass = StaticLoadClass(
+		UDanceSectorWidget::StaticClass(),
+		nullptr,
+		TEXT("/Game/UI/DanceWheelUI/WBP_DanceSector.WBP_DanceSector_C"));
+	if (!SectorClass)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[DanceWheel] WBP_DanceSector was not found."));
+		return;
+	}
+
+	Panel_Sectors->ClearChildren();
+	SectorWidgets.Reset();
+	bSectorsGenerated = true;
+
+	const float StepDegrees = 360.f / static_cast<float>(SectorCount);
+	for (int32 Index = 0; Index < SectorCount; ++Index)
+	{
+		UDanceSectorWidget* Sector = CreateWidget<UDanceSectorWidget>(this, SectorClass);
+		if (!Sector)
+		{
+			continue;
+		}
+
+		Sector->SetSectorIndex(Index);
+		UCanvasPanelSlot* CanvasSlot = Panel_Sectors->AddChildToCanvas(Sector);
+		if (!CanvasSlot)
+		{
+			continue;
+		}
+
+		Sector->SetButtonScale(SectorScale);
+
+		const float Degrees = FirstSectorAngle + StepDegrees * static_cast<float>(Index);
+		const float Radians = FMath::DegreesToRadians(Degrees);
+		CanvasSlot->SetAnchors(FAnchors(0.5f, 0.5f));
+		CanvasSlot->SetAlignment(FVector2D(0.5f, 0.5f));
+		CanvasSlot->SetAutoSize(true);
+		CanvasSlot->SetPosition(FVector2D(FMath::Sin(Radians) * SectorRadius, -FMath::Cos(Radians) * SectorRadius));
+		StopNavigation(Sector);
+		SectorWidgets.Add(Sector);
+	}
+}
+
+void UDanceWheelWidget::StopNavigation(UWidget* Widget)
+{
+	if (!Widget)
+	{
+		return;
+	}
+
+	Widget->SetAllNavigationRules(EUINavigationRule::Stop, NAME_None);
+
+	if (UPanelWidget* Panel = Cast<UPanelWidget>(Widget))
+	{
+		for (int32 ChildIndex = 0; ChildIndex < Panel->GetChildrenCount(); ++ChildIndex)
+		{
+			StopNavigation(Panel->GetChildAt(ChildIndex));
+		}
+	}
+	else if (UContentWidget* Content = Cast<UContentWidget>(Widget))
+	{
+		StopNavigation(Content->GetContent());
+	}
+}
+
+void UDanceWheelWidget::UpdateSelection()
+{
+	APlayerController* PC = GetOwningPlayer();
+	if (!PC || !Panel_Sectors || SectorWidgets.Num() == 0)
+	{
+		return;
+	}
+
+	float MouseX = 0.f;
+	float MouseY = 0.f;
+	if (!PC->GetMousePosition(MouseX, MouseY))
+	{
+		return;
+	}
+
+	FVector2D CenterAbsolute;
+	if (!TryGetAbsoluteCenter(Panel_Sectors, CenterAbsolute))
+	{
+		return;
+	}
+
+	FVector2D Center;
+	FVector2D UnusedViewport;
+	USlateBlueprintLibrary::AbsoluteToViewport(this, CenterAbsolute, Center, UnusedViewport);
+
+	FVector2D Mouse(MouseX, MouseY);
+	FVector2D FromCenter = Mouse - Center;
+	float Distance = FromCenter.Size();
+	if (Distance > KINDA_SMALL_NUMBER)
+	{
+		LastRingDirection = FromCenter / Distance;
 	}
 	else
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[DanceWheel] Missing button Btn_Dismiss."));
+		FromCenter = LastRingDirection;
+		Distance = 0.f;
 	}
 
-	UButton* DanceButtons[8] = {
-		Btn_Dance_0, Btn_Dance_1, Btn_Dance_2, Btn_Dance_3,
-		Btn_Dance_4, Btn_Dance_5, Btn_Dance_6, Btn_Dance_7
-	};
-
-	for (int32 Index = 0; Index < 8; ++Index)
+	const float InnerRadius = FMath::Max(0.f, CursorInnerRadius);
+	const float OuterRadius = FMath::Max(InnerRadius, CursorOuterRadius);
+	if (Distance < InnerRadius || Distance > OuterRadius)
 	{
-		if (!DanceButtons[Index])
+		const float ClampedDistance = FMath::Clamp(Distance, InnerRadius, OuterRadius);
+		Mouse = Center + LastRingDirection * ClampedDistance;
+		PC->SetMouseLocation(FMath::RoundToInt(Mouse.X), FMath::RoundToInt(Mouse.Y));
+	}
+
+	if (FVector2D::Distance(Mouse, Center) <= KINDA_SMALL_NUMBER)
+	{
+		return;
+	}
+
+	// 0 is straight up and increases clockwise. Shift by FirstSectorAngle so sector 0 is centered there.
+	float FromUp = FMath::Atan2(Mouse.Y - Center.Y, Mouse.X - Center.X) + HALF_PI;
+	FromUp -= FMath::DegreesToRadians(FirstSectorAngle);
+	FromUp = FMath::UnwindRadians(FromUp);
+	if (FromUp < 0.f)
+	{
+		FromUp += TWO_PI;
+	}
+
+	const int32 Count = SectorWidgets.Num();
+	const float Sector = TWO_PI / static_cast<float>(Count);
+	const int32 Index = FMath::FloorToInt((FromUp + Sector * 0.5f) / Sector) % Count;
+	SetSelectedIndex(Index);
+}
+
+void UDanceWheelWidget::SetSelectedIndex(int32 NewIndex)
+{
+	if (SelectedIndex == NewIndex)
+	{
+		return;
+	}
+
+	const int32 Previous = SelectedIndex;
+	SelectedIndex = NewIndex;
+
+	const bool bSwitchSector = Previous != INDEX_NONE && NewIndex != INDEX_NONE;
+	if (bSwitchSector)
+	{
+		if (SectorWidgets.IsValidIndex(Previous))
 		{
-			UE_LOG(LogTemp, Warning, TEXT("[DanceWheel] Missing button Btn_Dance_%d."), Index);
+			SectorWidgets[Previous]->OnSectorUnhovered();
 		}
+		OnSectorDeselected(Previous);
 	}
-
-	if (Btn_Dance_0)
+	if (SelectedIndex != INDEX_NONE)
 	{
-		Btn_Dance_0->OnClicked.AddDynamic(this, &UDanceWheelWidget::HandleDanceClicked0);
-		Btn_Dance_0->OnHovered.AddDynamic(this, &UDanceWheelWidget::HandleDanceHovered0);
+		if (SectorWidgets.IsValidIndex(SelectedIndex))
+		{
+			SectorWidgets[SelectedIndex]->OnSectorHovered();
+		}
+		OnSectorSelected(SelectedIndex);
+		PlayUiSound(HoverSound, HoverSoundStartTime);
 	}
-	if (Btn_Dance_1)
-	{
-		Btn_Dance_1->OnClicked.AddDynamic(this, &UDanceWheelWidget::HandleDanceClicked1);
-		Btn_Dance_1->OnHovered.AddDynamic(this, &UDanceWheelWidget::HandleDanceHovered1);
-	}
-	if (Btn_Dance_2)
-	{
-		Btn_Dance_2->OnClicked.AddDynamic(this, &UDanceWheelWidget::HandleDanceClicked2);
-		Btn_Dance_2->OnHovered.AddDynamic(this, &UDanceWheelWidget::HandleDanceHovered2);
-	}
-	if (Btn_Dance_3)
-	{
-		Btn_Dance_3->OnClicked.AddDynamic(this, &UDanceWheelWidget::HandleDanceClicked3);
-		Btn_Dance_3->OnHovered.AddDynamic(this, &UDanceWheelWidget::HandleDanceHovered3);
-	}
-	if (Btn_Dance_4)
-	{
-		Btn_Dance_4->OnClicked.AddDynamic(this, &UDanceWheelWidget::HandleDanceClicked4);
-		Btn_Dance_4->OnHovered.AddDynamic(this, &UDanceWheelWidget::HandleDanceHovered4);
-	}
-	if (Btn_Dance_5)
-	{
-		Btn_Dance_5->OnClicked.AddDynamic(this, &UDanceWheelWidget::HandleDanceClicked5);
-		Btn_Dance_5->OnHovered.AddDynamic(this, &UDanceWheelWidget::HandleDanceHovered5);
-	}
-	if (Btn_Dance_6)
-	{
-		Btn_Dance_6->OnClicked.AddDynamic(this, &UDanceWheelWidget::HandleDanceClicked6);
-		Btn_Dance_6->OnHovered.AddDynamic(this, &UDanceWheelWidget::HandleDanceHovered6);
-	}
-	if (Btn_Dance_7)
-	{
-		Btn_Dance_7->OnClicked.AddDynamic(this, &UDanceWheelWidget::HandleDanceClicked7);
-		Btn_Dance_7->OnHovered.AddDynamic(this, &UDanceWheelWidget::HandleDanceHovered7);
-	}
-}
-
-void UDanceWheelWidget::HandleDismissClicked()
-{
-	CloseWheel();
-}
-
-void UDanceWheelWidget::HandleDanceClicked(int32 DanceIndex)
-{
-	PlayUiSound(ClickSound, ClickSoundStartTime);
-	CloseWheel();
-	PlayDance(DanceIndex);
-}
-
-void UDanceWheelWidget::HandleDanceHovered(int32 DanceIndex)
-{
-	(void)DanceIndex;
-	PlayUiSound(HoverSound, HoverSoundStartTime);
 }
 
 void UDanceWheelWidget::PlayUiSound(USoundBase* Sound, float StartTime) const
@@ -135,20 +281,20 @@ void UDanceWheelWidget::PlayUiSound(USoundBase* Sound, float StartTime) const
 	}
 }
 
-void UDanceWheelWidget::HandleDanceClicked0() { HandleDanceClicked(0); }
-void UDanceWheelWidget::HandleDanceClicked1() { HandleDanceClicked(1); }
-void UDanceWheelWidget::HandleDanceClicked2() { HandleDanceClicked(2); }
-void UDanceWheelWidget::HandleDanceClicked3() { HandleDanceClicked(3); }
-void UDanceWheelWidget::HandleDanceClicked4() { HandleDanceClicked(4); }
-void UDanceWheelWidget::HandleDanceClicked5() { HandleDanceClicked(5); }
-void UDanceWheelWidget::HandleDanceClicked6() { HandleDanceClicked(6); }
-void UDanceWheelWidget::HandleDanceClicked7() { HandleDanceClicked(7); }
+bool UDanceWheelWidget::TryGetAbsoluteCenter(UWidget* Widget, FVector2D& OutCenter) const
+{
+	if (!Widget)
+	{
+		return false;
+	}
 
-void UDanceWheelWidget::HandleDanceHovered0() { HandleDanceHovered(0); }
-void UDanceWheelWidget::HandleDanceHovered1() { HandleDanceHovered(1); }
-void UDanceWheelWidget::HandleDanceHovered2() { HandleDanceHovered(2); }
-void UDanceWheelWidget::HandleDanceHovered3() { HandleDanceHovered(3); }
-void UDanceWheelWidget::HandleDanceHovered4() { HandleDanceHovered(4); }
-void UDanceWheelWidget::HandleDanceHovered5() { HandleDanceHovered(5); }
-void UDanceWheelWidget::HandleDanceHovered6() { HandleDanceHovered(6); }
-void UDanceWheelWidget::HandleDanceHovered7() { HandleDanceHovered(7); }
+	const FGeometry& Geometry = Widget->GetCachedGeometry();
+	const FVector2D Size = Geometry.GetAbsoluteSize();
+	if (Size.X <= KINDA_SMALL_NUMBER || Size.Y <= KINDA_SMALL_NUMBER)
+	{
+		return false;
+	}
+
+	OutCenter = Geometry.GetAbsolutePosition() + Size * 0.5f;
+	return true;
+}

@@ -7,6 +7,24 @@
 #include "AlsViewSettings.h"
 #include "AlsCharacterSettings.generated.h"
 
+class UAnimMontage;
+
+USTRUCT(BlueprintType)
+struct ALS_API FAlsAirJumpSettings
+{
+	GENERATED_BODY()
+
+	/// Montage played when a jump starts after the character has already jumped once.
+	/// Leave empty to keep the normal in-air animation.
+	/// The montage slot must be sampled by the animation blueprint. ALS action montages use LayerLegs,
+	/// and they drive the LayerLegsSlot curve so that slot actually blends in.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ALS")
+	TObjectPtr<UAnimMontage> Montage;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ALS", Meta = (ClampMin = 0.1, ForceUnits = "x"))
+	float PlayRate{1.0f};
+};
+
 UCLASS(Blueprintable, BlueprintType)
 class ALS_API UAlsCharacterSettings : public UDataAsset
 {
@@ -63,6 +81,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Settings")
 	FAlsRollingSettings Rolling;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Settings")
+	FAlsAirJumpSettings AirJump;
 
 public:
 	UAlsCharacterSettings();

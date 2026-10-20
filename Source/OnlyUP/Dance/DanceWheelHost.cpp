@@ -40,6 +40,7 @@ void ADanceWheelHost::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		{
 			ApplyInputMode(false);
 		}
+		SetLookIgnored(false);
 	}
 
 	if (WheelWidget)
@@ -82,10 +83,15 @@ void ADanceWheelHost::BindInputIfNeeded()
 		return;
 	}
 
-	InputComponent->BindKey(EKeys::Tab, IE_Pressed, this, &ADanceWheelHost::ToggleWheel);
-	if (InputComponent->KeyBindings.Num() > 0)
+	InputComponent->BindKey(EKeys::Tab, IE_Pressed, this, &ADanceWheelHost::OpenFromTab);
+	InputComponent->BindKey(EKeys::Tab, IE_Released, this, &ADanceWheelHost::CloseFromTab);
+	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &ADanceWheelHost::ConfirmFromClick);
+	for (FInputKeyBinding& Binding : InputComponent->KeyBindings)
 	{
-		InputComponent->KeyBindings.Last().bConsumeInput = true;
+		if (Binding.Chord.Key == EKeys::Tab)
+		{
+			Binding.bConsumeInput = true;
+		}
 	}
 	PC->PushInputComponent(InputComponent);
 	bInputBound = true;
@@ -124,29 +130,60 @@ void ADanceWheelHost::EnsureWidget()
 	UE_LOG(LogTemp, Log, TEXT("[DanceWheel] Widget created."));
 }
 
-void ADanceWheelHost::ToggleWheel()
+void ADanceWheelHost::OpenFromTab()
 {
+	if (bClosedByClickWhileHeld)
+	{
+		return;
+	}
+
 	EnsureWidget();
-	if (!WheelWidget)
+	if (!WheelWidget || bWheelOpen)
 	{
 		return;
 	}
 
-	if (!bWheelOpen)
+	bWheelOpen = true;
+	WheelWidget->OpenWheel();
+	ApplyInputMode(true);
+	SetLookIgnored(true);
+	UpdateClickConsume();
+}
+
+void ADanceWheelHost::CloseFromTab()
+{
+	bClosedByClickWhileHeld = false;
+	if (!bWheelOpen || !WheelWidget)
 	{
-		bWheelOpen = true;
-		WheelWidget->OpenWheel();
-		ApplyInputMode(true);
+		SetLookIgnored(false);
 		return;
 	}
 
+	bCloseRequestedByTab = true;
 	WheelWidget->CloseWheel();
+	bCloseRequestedByTab = false;
+}
+
+void ADanceWheelHost::ConfirmFromClick()
+{
+	if (bWheelOpen && WheelWidget)
+	{
+		WheelWidget->ConfirmSelection();
+	}
 }
 
 void ADanceWheelHost::HandleWheelClosedFromWidget()
 {
+	APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+	if (!bCloseRequestedByTab && PC && PC->IsInputKeyDown(EKeys::Tab))
+	{
+		bClosedByClickWhileHeld = true;
+	}
+
 	bWheelOpen = false;
 	ApplyInputMode(false);
+	SetLookIgnored(false);
+	UpdateClickConsume();
 }
 
 void ADanceWheelHost::ApplyInputMode(bool bOpen)
@@ -162,13 +199,45 @@ void ADanceWheelHost::ApplyInputMode(bool bOpen)
 		FInputModeGameAndUI Mode;
 		Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
 		Mode.SetHideCursorDuringCapture(false);
-		Mode.SetWidgetToFocus(WheelWidget->TakeWidget());
 		PC->SetInputMode(Mode);
-		PC->bShowMouseCursor = true;
+		PC->bShowMouseCursor = WheelWidget->ShouldShowCursorWhileOpen();
 	}
 	else
 	{
 		PC->SetInputMode(FInputModeGameOnly());
 		PC->bShowMouseCursor = false;
+	}
+}
+
+void ADanceWheelHost::SetLookIgnored(bool bIgnore)
+{
+	if (bLookIgnored == bIgnore)
+	{
+		return;
+	}
+
+	APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+	if (!PC)
+	{
+		return;
+	}
+
+	PC->SetIgnoreLookInput(bIgnore);
+	bLookIgnored = bIgnore;
+}
+
+void ADanceWheelHost::UpdateClickConsume()
+{
+	if (!InputComponent)
+	{
+		return;
+	}
+
+	for (FInputKeyBinding& Binding : InputComponent->KeyBindings)
+	{
+		if (Binding.Chord.Key == EKeys::LeftMouseButton)
+		{
+			Binding.bConsumeInput = bWheelOpen;
+		}
 	}
 }

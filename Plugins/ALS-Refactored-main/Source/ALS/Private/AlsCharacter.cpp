@@ -48,6 +48,9 @@ AAlsCharacter::AAlsCharacter(const FObjectInitializer& ObjectInitializer) : Supe
 
 	AlsCharacterMovement = Cast<UAlsCharacterMovementComponent>(GetCharacterMovement());
 
+	// One grounded jump plus one air jump. Blueprint defaults that never overrode this property pick up the new value.
+	JumpMaxCount = 2;
+
 	// This will prevent the editor from combining component details with actor details.
 	// Component details can still be accessed from the actor's component hierarchy.
 
@@ -1463,42 +1466,118 @@ void AAlsCharacter::MulticastSetInitialVelocityYawAngle_Implementation(const flo
 
 void AAlsCharacter::Jump()
 {
-	if (Stance == AlsStanceTags::Standing && !LocomotionAction.IsValid() &&
-	    LocomotionMode == AlsLocomotionModeTags::Grounded)
+	bJumpCalledThisFrame = true;
+
+	// Jump() is invoked every frame while the key is held when the input trigger stays active.
+	// JumpMaxHoldTime is 0, so the engine clears bPressedJump after one tick. Without this gate
+	// the next held frame looks like a new press and spends the air jump immediately.
+	if (bJumpPressConsumed)
 	{
-		Super::Jump();
+		return;
 	}
+
+	bJumpPressConsumed = true;
+
+	if (Stance != AlsStanceTags::Standing || LocomotionAction.IsValid() || JumpCurrentCount >= JumpMaxCount ||
+	    (LocomotionMode != AlsLocomotionModeTags::Grounded && LocomotionMode != AlsLocomotionModeTags::InAir))
+	{
+		return;
+	}
+
+	Super::Jump();
+}
+
+void AAlsCharacter::StopJumping()
+{
+	bJumpPressConsumed = false;
+
+	Super::StopJumping();
+}
+
+bool AAlsCharacter::CanJumpInternal_Implementation() const
+{
+	if (Stance != AlsStanceTags::Standing || LocomotionAction.IsValid() ||
+	    (LocomotionMode != AlsLocomotionModeTags::Grounded && LocomotionMode != AlsLocomotionModeTags::InAir))
+	{
+		return false;
+	}
+
+	return Super::CanJumpInternal_Implementation();
+}
+
+void AAlsCharacter::ClearJumpInput(const float DeltaTime)
+{
+	Super::ClearJumpInput(DeltaTime);
+
+	// Replayed moves call this without a fresh Jump(). Leave the live press state alone.
+	if (bClientUpdating)
+	{
+		return;
+	}
+
+	if (!bJumpCalledThisFrame)
+	{
+		bJumpPressConsumed = false;
+	}
+
+	bJumpCalledThisFrame = false;
 }
 
 void AAlsCharacter::OnJumped_Implementation()
 {
 	Super::OnJumped_Implementation();
 
+	// JumpCurrentCountPreJump is the count before this jump. Greater than zero means this is an air jump
+	// after a previous jump, which is the double jump. Walking off a ledge still has a pre-jump count of zero.
+	// Replayed moves call OnJumped again; skip the montage there so a correction does not restart it.
+	const auto bAirJump{JumpCurrentCountPreJump > 0 && !bClientUpdating};
+
 	if (GetLocalRole() == ROLE_AutonomousProxy)
 	{
-		OnJumpedNetworked();
+		OnJumpedNetworked(bAirJump);
 	}
 	else if (GetLocalRole() >= ROLE_Authority)
 	{
-		MulticastOnJumpedNetworked();
+		MulticastOnJumpedNetworked(bAirJump);
 	}
 }
 
-void AAlsCharacter::MulticastOnJumpedNetworked_Implementation()
+void AAlsCharacter::MulticastOnJumpedNetworked_Implementation(const bool bAirJump)
 {
 	if (GetLocalRole() != ROLE_AutonomousProxy)
 	{
-		OnJumpedNetworked();
+		OnJumpedNetworked(bAirJump);
 	}
 }
 
 // ReSharper disable once CppMemberFunctionMayBeConst
-void AAlsCharacter::OnJumpedNetworked()
+void AAlsCharacter::OnJumpedNetworked(const bool bAirJump)
 {
 	if (AnimationInstance.IsValid())
 	{
 		AnimationInstance->Jump();
 	}
+
+	if (bAirJump)
+	{
+		PlayAirJumpMontage();
+	}
+}
+
+void AAlsCharacter::PlayAirJumpMontage() const
+{
+	if (!IsValid(Settings) || !IsValid(Settings->AirJump.Montage) || !IsValid(GetMesh()))
+	{
+		return;
+	}
+
+	auto* AnimInstance{GetMesh()->GetAnimInstance()};
+	if (!IsValid(AnimInstance))
+	{
+		return;
+	}
+
+	AnimInstance->Montage_Play(Settings->AirJump.Montage, FMath::Max(Settings->AirJump.PlayRate, 0.1f));
 }
 
 void AAlsCharacter::FaceRotation(const FRotator Rotation, const float DeltaTime)
